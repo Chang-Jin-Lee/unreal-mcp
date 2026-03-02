@@ -241,6 +241,10 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
             // Blueprint Commands
             else if (CommandType == TEXT("create_blueprint") || 
                      CommandType == TEXT("add_component_to_blueprint") || 
+                     CommandType == TEXT("create_material") ||
+                     CommandType == TEXT("create_material_instance") ||
+                     CommandType == TEXT("set_material_param") ||
+                     CommandType == TEXT("assign_material") ||
                      CommandType == TEXT("set_component_property") || 
                      CommandType == TEXT("set_physics_properties") || 
                      CommandType == TEXT("compile_blueprint") || 

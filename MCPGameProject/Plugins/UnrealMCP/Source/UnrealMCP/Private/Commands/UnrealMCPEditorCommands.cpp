@@ -20,6 +20,8 @@
 #include "Subsystems/EditorActorSubsystem.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
+#include "EditorAssetLibrary.h"
+#include "Misc/PackageName.h"
 
 FUnrealMCPEditorCommands::FUnrealMCPEditorCommands()
 {
@@ -417,15 +419,24 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleSpawnBlueprintActor(cons
         return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Blueprint name is empty"));
     }
 
-    FString Root      = TEXT("/Game/Blueprints/");
-    FString AssetPath = Root + BlueprintName;
-
-    if (!FPackageName::DoesPackageExist(AssetPath))
+    // Accept either short names (e.g., "BP_Test") or full object paths.
+    // Also support in-memory, unsaved assets by trying direct object load first.
+    FString AssetPath = BlueprintName;
+    if (!AssetPath.StartsWith(TEXT("/")))
     {
-        return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint '%s' not found – it must reside under /Game/Blueprints"), *BlueprintName));
+        AssetPath = TEXT("/Game/Blueprints/") + AssetPath;
+    }
+    if (!AssetPath.Contains(TEXT(".")))
+    {
+        const FString AssetName = FPackageName::GetShortName(AssetPath);
+        AssetPath = FString::Printf(TEXT("%s.%s"), *AssetPath, *AssetName);
     }
 
     UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
+    if (!Blueprint)
+    {
+        Blueprint = Cast<UBlueprint>(UEditorAssetLibrary::LoadAsset(AssetPath));
+    }
     if (!Blueprint)
     {
         return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));

@@ -20,6 +20,121 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Pawn.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInstanceConstant.h"
+#include "Materials/MaterialInterface.h"
+#include "Materials/MaterialExpressionVectorParameter.h"
+#include "Materials/MaterialExpressionScalarParameter.h"
+#include "Materials/MaterialExpressionMultiply.h"
+#include "Materials/MaterialExpressionFresnel.h"
+#include "Materials/MaterialExpressionLinearInterpolate.h"
+#include "Materials/MaterialExpressionWorldPosition.h"
+#include "Materials/MaterialExpressionComponentMask.h"
+#include "Materials/MaterialExpressionSine.h"
+#include "Materials/MaterialExpressionAbs.h"
+#include "Materials/MaterialExpressionSaturate.h"
+#include "Materials/MaterialExpressionTextureSampleParameter2D.h"
+#include "Materials/MaterialExpressionTextureObjectParameter.h"
+#include "Materials/MaterialExpressionTextureSample.h"
+#include "Factories/MaterialFactoryNew.h"
+#include "Factories/MaterialInstanceConstantFactoryNew.h"
+#include "MaterialEditingLibrary.h"
+#include "Components/MeshComponent.h"
+#include "Kismet/GameplayStatics.h"
+#include "Engine/StaticMeshActor.h"
+#include "Engine/Texture.h"
+#include "Misc/PackageName.h"
+
+namespace
+{
+    FString NormalizeAssetPath(const FString& InPath, const FString& DefaultRoot)
+    {
+        FString Path = InPath;
+        if (Path.IsEmpty())
+        {
+            Path = DefaultRoot;
+        }
+
+        if (!Path.StartsWith(TEXT("/")))
+        {
+            Path = DefaultRoot / Path;
+        }
+
+        return Path;
+    }
+
+    FString NormalizeObjectPath(const FString& InPath, const FString& DefaultRoot)
+    {
+        FString Path = NormalizeAssetPath(InPath, DefaultRoot);
+        if (!Path.Contains(TEXT(".")))
+        {
+            const FString ShortName = FPackageName::GetShortName(Path);
+            Path = FString::Printf(TEXT("%s.%s"), *Path, *ShortName);
+        }
+        return Path;
+    }
+
+    UMaterialExpression* AddExpr(UMaterial* Material, TSubclassOf<UMaterialExpression> ExprClass, int32 X, int32 Y)
+    {
+        return UMaterialEditingLibrary::CreateMaterialExpression(Material, ExprClass, X, Y);
+    }
+
+    void ConfigurePresetDefaults(UMaterialInstanceConstant* Instance, const FString& Preset, int32 VariantIndex)
+    {
+        const float T = FMath::Clamp(static_cast<float>(VariantIndex) / 9.0f, 0.0f, 1.0f);
+
+        if (Preset == TEXT("toon"))
+        {
+            UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(Instance, TEXT("BaseColor"), FLinearColor(0.2f + 0.6f * T, 0.3f + 0.3f * T, 0.8f - 0.5f * T, 1.0f));
+            UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(Instance, TEXT("OutlineColor"), FLinearColor::Black);
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("OutlineStrength"), 0.1f + 0.8f * T);
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("Roughness"), 0.35f);
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("Metallic"), 0.0f);
+        }
+        else if (Preset == TEXT("hatch"))
+        {
+            UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(Instance, TEXT("BaseColor"), FLinearColor(1.0f, 1.0f, 1.0f, 1.0f));
+            UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(Instance, TEXT("HatchColor"), FLinearColor::Black);
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("HatchDensity"), 6.0f + 40.0f * T);
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("HatchStrength"), 0.1f + 0.85f * T);
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("Roughness"), 0.8f);
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("Metallic"), 0.0f);
+        }
+        else if (Preset == TEXT("emissive"))
+        {
+            UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(Instance, TEXT("BaseColor"), FLinearColor(0.04f, 0.04f, 0.04f, 1.0f));
+            UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(Instance, TEXT("EmissiveColor"), FLinearColor(0.1f + 0.9f * T, 0.2f + 0.8f * (1.0f - T), 1.0f, 1.0f));
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("EmissiveStrength"), 0.5f + 18.0f * T);
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("Roughness"), 0.2f);
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("Metallic"), 0.0f);
+        }
+        else if (Preset == TEXT("water"))
+        {
+            UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(Instance, TEXT("BaseColor"), FLinearColor(0.0f, 0.18f + 0.4f * T, 0.45f + 0.4f * T, 1.0f));
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("Opacity"), 0.05f + 0.4f * T);
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("Roughness"), 0.02f + 0.2f * (1.0f - T));
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("Metallic"), 0.0f);
+            UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(Instance, TEXT("EmissiveColor"), FLinearColor(0.0f, 0.04f, 0.08f, 1.0f));
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("EmissiveStrength"), 0.2f + 0.4f * T);
+        }
+        else if (Preset == TEXT("ice"))
+        {
+            UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(Instance, TEXT("BaseColor"), FLinearColor(0.6f + 0.3f * T, 0.75f + 0.2f * T, 1.0f, 1.0f));
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("Opacity"), 0.15f + 0.55f * T);
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("Roughness"), 0.02f + 0.3f * T);
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("Metallic"), 0.0f);
+            UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(Instance, TEXT("EmissiveColor"), FLinearColor(0.0f, 0.02f, 0.08f, 1.0f));
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("EmissiveStrength"), 0.1f + 0.3f * (1.0f - T));
+        }
+        else if (Preset == TEXT("rm"))
+        {
+            UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(Instance, TEXT("BaseColor"), FLinearColor(0.9f, 0.65f, 0.2f, 1.0f));
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("Roughness"), T);
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("Metallic"), 1.0f - T);
+            UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(Instance, TEXT("EmissiveStrength"), 0.0f);
+        }
+    }
+}
 
 FUnrealMCPBlueprintCommands::FUnrealMCPBlueprintCommands()
 {
@@ -34,6 +149,22 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleCommand(const FString
     else if (CommandType == TEXT("add_component_to_blueprint"))
     {
         return HandleAddComponentToBlueprint(Params);
+    }
+    else if (CommandType == TEXT("create_material"))
+    {
+        return HandleCreateMaterial(Params);
+    }
+    else if (CommandType == TEXT("create_material_instance"))
+    {
+        return HandleCreateMaterialInstance(Params);
+    }
+    else if (CommandType == TEXT("set_material_param"))
+    {
+        return HandleSetMaterialParam(Params);
+    }
+    else if (CommandType == TEXT("assign_material"))
+    {
+        return HandleAssignMaterial(Params);
     }
     else if (CommandType == TEXT("set_component_property"))
     {
@@ -258,6 +389,510 @@ TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleAddComponentToBluepri
     }
 
     return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to add component to blueprint"));
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleCreateMaterial(const TSharedPtr<FJsonObject>& Params)
+{
+    FString MaterialName;
+    if (!Params->TryGetStringField(TEXT("name"), MaterialName))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' parameter"));
+    }
+
+    FString FolderPath = TEXT("/Game/Materials");
+    Params->TryGetStringField(TEXT("path"), FolderPath);
+    FolderPath = NormalizeAssetPath(FolderPath, TEXT("/Game/Materials"));
+
+    FString Preset = TEXT("standard");
+    Params->TryGetStringField(TEXT("preset"), Preset);
+    Preset = Preset.ToLower();
+
+    const FString AssetPath = FolderPath / MaterialName;
+    if (UEditorAssetLibrary::DoesAssetExist(AssetPath))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Material already exists: %s"), *AssetPath));
+    }
+
+    UPackage* Package = CreatePackage(*AssetPath);
+    if (!Package)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to create material package"));
+    }
+
+    UMaterialFactoryNew* Factory = NewObject<UMaterialFactoryNew>();
+    UMaterial* Material = Cast<UMaterial>(
+        Factory->FactoryCreateNew(
+            UMaterial::StaticClass(),
+            Package,
+            *MaterialName,
+            RF_Public | RF_Standalone,
+            nullptr,
+            GWarn
+        )
+    );
+
+    if (!Material)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to create material"));
+    }
+
+    // Shared parameter set
+    UMaterialExpressionVectorParameter* BaseColor = Cast<UMaterialExpressionVectorParameter>(AddExpr(Material, UMaterialExpressionVectorParameter::StaticClass(), -900, -200));
+    UMaterialExpressionScalarParameter* Roughness = Cast<UMaterialExpressionScalarParameter>(AddExpr(Material, UMaterialExpressionScalarParameter::StaticClass(), -900, 50));
+    UMaterialExpressionScalarParameter* Metallic = Cast<UMaterialExpressionScalarParameter>(AddExpr(Material, UMaterialExpressionScalarParameter::StaticClass(), -900, 220));
+    UMaterialExpressionVectorParameter* EmissiveColor = Cast<UMaterialExpressionVectorParameter>(AddExpr(Material, UMaterialExpressionVectorParameter::StaticClass(), -900, 400));
+    UMaterialExpressionScalarParameter* EmissiveStrength = Cast<UMaterialExpressionScalarParameter>(AddExpr(Material, UMaterialExpressionScalarParameter::StaticClass(), -900, 560));
+    UMaterialExpressionMultiply* EmissiveMul = Cast<UMaterialExpressionMultiply>(AddExpr(Material, UMaterialExpressionMultiply::StaticClass(), -600, 480));
+    UMaterialExpressionScalarParameter* Opacity = Cast<UMaterialExpressionScalarParameter>(AddExpr(Material, UMaterialExpressionScalarParameter::StaticClass(), -900, 760));
+
+    BaseColor->ParameterName = TEXT("BaseColor");
+    BaseColor->DefaultValue = FLinearColor(0.8f, 0.8f, 0.8f, 1.0f);
+    Roughness->ParameterName = TEXT("Roughness");
+    Roughness->DefaultValue = 0.5f;
+    Metallic->ParameterName = TEXT("Metallic");
+    Metallic->DefaultValue = 0.0f;
+    EmissiveColor->ParameterName = TEXT("EmissiveColor");
+    EmissiveColor->DefaultValue = FLinearColor::Black;
+    EmissiveStrength->ParameterName = TEXT("EmissiveStrength");
+    EmissiveStrength->DefaultValue = 0.0f;
+    Opacity->ParameterName = TEXT("Opacity");
+    Opacity->DefaultValue = 1.0f;
+
+    UMaterialEditingLibrary::ConnectMaterialExpressions(EmissiveColor, TEXT(""), EmissiveMul, TEXT("A"));
+    UMaterialEditingLibrary::ConnectMaterialExpressions(EmissiveStrength, TEXT(""), EmissiveMul, TEXT("B"));
+
+    UMaterialEditingLibrary::ConnectMaterialProperty(Roughness, TEXT(""), MP_Roughness);
+    UMaterialEditingLibrary::ConnectMaterialProperty(Metallic, TEXT(""), MP_Metallic);
+    UMaterialEditingLibrary::ConnectMaterialProperty(EmissiveMul, TEXT(""), MP_EmissiveColor);
+    UMaterialEditingLibrary::ConnectMaterialProperty(Opacity, TEXT(""), MP_Opacity);
+
+    if (Preset == TEXT("toon"))
+    {
+        UMaterialExpressionVectorParameter* OutlineColor = Cast<UMaterialExpressionVectorParameter>(AddExpr(Material, UMaterialExpressionVectorParameter::StaticClass(), -900, -20));
+        UMaterialExpressionScalarParameter* OutlineStrength = Cast<UMaterialExpressionScalarParameter>(AddExpr(Material, UMaterialExpressionScalarParameter::StaticClass(), -900, 120));
+        UMaterialExpressionFresnel* Fresnel = Cast<UMaterialExpressionFresnel>(AddExpr(Material, UMaterialExpressionFresnel::StaticClass(), -650, 0));
+        UMaterialExpressionMultiply* OutlineMul = Cast<UMaterialExpressionMultiply>(AddExpr(Material, UMaterialExpressionMultiply::StaticClass(), -450, 40));
+        UMaterialExpressionLinearInterpolate* ToonLerp = Cast<UMaterialExpressionLinearInterpolate>(AddExpr(Material, UMaterialExpressionLinearInterpolate::StaticClass(), -250, -80));
+
+        OutlineColor->ParameterName = TEXT("OutlineColor");
+        OutlineColor->DefaultValue = FLinearColor::Black;
+        OutlineStrength->ParameterName = TEXT("OutlineStrength");
+        OutlineStrength->DefaultValue = 0.5f;
+        Fresnel->Exponent = 4.0f;
+
+        UMaterialEditingLibrary::ConnectMaterialExpressions(Fresnel, TEXT(""), OutlineMul, TEXT("A"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(OutlineStrength, TEXT(""), OutlineMul, TEXT("B"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(BaseColor, TEXT(""), ToonLerp, TEXT("A"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(OutlineColor, TEXT(""), ToonLerp, TEXT("B"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(OutlineMul, TEXT(""), ToonLerp, TEXT("Alpha"));
+        UMaterialEditingLibrary::ConnectMaterialProperty(ToonLerp, TEXT(""), MP_BaseColor);
+    }
+    else if (Preset == TEXT("hatch"))
+    {
+        UMaterialExpressionVectorParameter* HatchColor = Cast<UMaterialExpressionVectorParameter>(AddExpr(Material, UMaterialExpressionVectorParameter::StaticClass(), -900, -20));
+        UMaterialExpressionScalarParameter* HatchDensity = Cast<UMaterialExpressionScalarParameter>(AddExpr(Material, UMaterialExpressionScalarParameter::StaticClass(), -900, 120));
+        UMaterialExpressionScalarParameter* HatchStrength = Cast<UMaterialExpressionScalarParameter>(AddExpr(Material, UMaterialExpressionScalarParameter::StaticClass(), -900, 260));
+        UMaterialExpressionWorldPosition* WorldPos = Cast<UMaterialExpressionWorldPosition>(AddExpr(Material, UMaterialExpressionWorldPosition::StaticClass(), -700, -20));
+        UMaterialExpressionComponentMask* MaskX = Cast<UMaterialExpressionComponentMask>(AddExpr(Material, UMaterialExpressionComponentMask::StaticClass(), -520, -80));
+        UMaterialExpressionComponentMask* MaskY = Cast<UMaterialExpressionComponentMask>(AddExpr(Material, UMaterialExpressionComponentMask::StaticClass(), -520, 40));
+        UMaterialExpressionMultiply* MulX = Cast<UMaterialExpressionMultiply>(AddExpr(Material, UMaterialExpressionMultiply::StaticClass(), -360, -100));
+        UMaterialExpressionMultiply* MulY = Cast<UMaterialExpressionMultiply>(AddExpr(Material, UMaterialExpressionMultiply::StaticClass(), -360, 20));
+        UMaterialExpressionSine* SinX = Cast<UMaterialExpressionSine>(AddExpr(Material, UMaterialExpressionSine::StaticClass(), -200, -100));
+        UMaterialExpressionSine* SinY = Cast<UMaterialExpressionSine>(AddExpr(Material, UMaterialExpressionSine::StaticClass(), -200, 20));
+        UMaterialExpressionAbs* AbsX = Cast<UMaterialExpressionAbs>(AddExpr(Material, UMaterialExpressionAbs::StaticClass(), -70, -100));
+        UMaterialExpressionAbs* AbsY = Cast<UMaterialExpressionAbs>(AddExpr(Material, UMaterialExpressionAbs::StaticClass(), -70, 20));
+        UMaterialExpressionMultiply* HatchPattern = Cast<UMaterialExpressionMultiply>(AddExpr(Material, UMaterialExpressionMultiply::StaticClass(), 70, -50));
+        UMaterialExpressionSaturate* HatchSat = Cast<UMaterialExpressionSaturate>(AddExpr(Material, UMaterialExpressionSaturate::StaticClass(), 220, -50));
+        UMaterialExpressionMultiply* HatchAlpha = Cast<UMaterialExpressionMultiply>(AddExpr(Material, UMaterialExpressionMultiply::StaticClass(), 390, -10));
+        UMaterialExpressionLinearInterpolate* HatchLerp = Cast<UMaterialExpressionLinearInterpolate>(AddExpr(Material, UMaterialExpressionLinearInterpolate::StaticClass(), 560, -60));
+
+        HatchColor->ParameterName = TEXT("HatchColor");
+        HatchColor->DefaultValue = FLinearColor::Black;
+        HatchDensity->ParameterName = TEXT("HatchDensity");
+        HatchDensity->DefaultValue = 22.0f;
+        HatchStrength->ParameterName = TEXT("HatchStrength");
+        HatchStrength->DefaultValue = 0.6f;
+        MaskX->R = true;
+        MaskY->G = true;
+
+        UMaterialEditingLibrary::ConnectMaterialExpressions(WorldPos, TEXT(""), MaskX, TEXT("Input"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(WorldPos, TEXT(""), MaskY, TEXT("Input"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(MaskX, TEXT(""), MulX, TEXT("A"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(MaskY, TEXT(""), MulY, TEXT("A"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(HatchDensity, TEXT(""), MulX, TEXT("B"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(HatchDensity, TEXT(""), MulY, TEXT("B"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(MulX, TEXT(""), SinX, TEXT("Input"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(MulY, TEXT(""), SinY, TEXT("Input"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(SinX, TEXT(""), AbsX, TEXT("Input"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(SinY, TEXT(""), AbsY, TEXT("Input"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(AbsX, TEXT(""), HatchPattern, TEXT("A"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(AbsY, TEXT(""), HatchPattern, TEXT("B"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(HatchPattern, TEXT(""), HatchSat, TEXT("Input"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(HatchSat, TEXT(""), HatchAlpha, TEXT("A"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(HatchStrength, TEXT(""), HatchAlpha, TEXT("B"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(BaseColor, TEXT(""), HatchLerp, TEXT("A"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(HatchColor, TEXT(""), HatchLerp, TEXT("B"));
+        UMaterialEditingLibrary::ConnectMaterialExpressions(HatchAlpha, TEXT(""), HatchLerp, TEXT("Alpha"));
+        UMaterialEditingLibrary::ConnectMaterialProperty(HatchLerp, TEXT(""), MP_BaseColor);
+    }
+    else
+    {
+        UMaterialEditingLibrary::ConnectMaterialProperty(BaseColor, TEXT(""), MP_BaseColor);
+    }
+
+    if (Preset == TEXT("water") || Preset == TEXT("ice"))
+    {
+        Material->BlendMode = BLEND_Translucent;
+        Material->TwoSided = false;
+    }
+    else
+    {
+        Material->BlendMode = BLEND_Opaque;
+    }
+
+    UMaterialEditingLibrary::LayoutMaterialExpressions(Material);
+    UMaterialEditingLibrary::RecompileMaterial(Material);
+    Material->PostEditChange();
+    Package->MarkPackageDirty();
+    FAssetRegistryModule::AssetCreated(Material);
+    UEditorAssetLibrary::SaveLoadedAsset(Material, false);
+
+    TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+    ResultObj->SetStringField(TEXT("name"), MaterialName);
+    ResultObj->SetStringField(TEXT("path"), AssetPath);
+    ResultObj->SetStringField(TEXT("preset"), Preset);
+    return ResultObj;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleCreateMaterialInstance(const TSharedPtr<FJsonObject>& Params)
+{
+    FString InstanceName;
+    if (!Params->TryGetStringField(TEXT("name"), InstanceName))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' parameter"));
+    }
+
+    FString ParentMaterialPath;
+    if (!Params->TryGetStringField(TEXT("parent_material"), ParentMaterialPath))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'parent_material' parameter"));
+    }
+
+    FString InstanceFolder = TEXT("/Game/Materials/Instances");
+    Params->TryGetStringField(TEXT("path"), InstanceFolder);
+    InstanceFolder = NormalizeAssetPath(InstanceFolder, TEXT("/Game/Materials/Instances"));
+
+    if (ParentMaterialPath.Contains(TEXT(".")))
+    {
+        ParentMaterialPath = ParentMaterialPath.Left(ParentMaterialPath.Find(TEXT("."), ESearchCase::CaseSensitive, ESearchDir::FromEnd));
+    }
+    ParentMaterialPath = NormalizeAssetPath(ParentMaterialPath, TEXT("/Game/Materials"));
+
+    UMaterialInterface* ParentMaterial = Cast<UMaterialInterface>(UEditorAssetLibrary::LoadAsset(ParentMaterialPath));
+    if (!ParentMaterial)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Parent material not found: %s"), *ParentMaterialPath));
+    }
+
+    const FString AssetPath = InstanceFolder / InstanceName;
+    if (UEditorAssetLibrary::DoesAssetExist(AssetPath))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Material instance already exists: %s"), *AssetPath));
+    }
+
+    UPackage* Package = CreatePackage(*AssetPath);
+    if (!Package)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to create material instance package"));
+    }
+
+    UMaterialInstanceConstantFactoryNew* Factory = NewObject<UMaterialInstanceConstantFactoryNew>();
+    Factory->InitialParent = ParentMaterial;
+    UMaterialInstanceConstant* MIC = Cast<UMaterialInstanceConstant>(
+        Factory->FactoryCreateNew(
+            UMaterialInstanceConstant::StaticClass(),
+            Package,
+            *InstanceName,
+            RF_Public | RF_Standalone,
+            nullptr,
+            GWarn
+        )
+    );
+
+    if (!MIC)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to create material instance"));
+    }
+
+    MIC->SetParentEditorOnly(ParentMaterial);
+    MIC->PostEditChange();
+    Package->MarkPackageDirty();
+    FAssetRegistryModule::AssetCreated(MIC);
+    UEditorAssetLibrary::SaveLoadedAsset(MIC, false);
+
+    TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+    ResultObj->SetStringField(TEXT("name"), InstanceName);
+    ResultObj->SetStringField(TEXT("path"), AssetPath);
+    ResultObj->SetStringField(TEXT("parent_material"), ParentMaterialPath);
+    return ResultObj;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleSetMaterialParam(const TSharedPtr<FJsonObject>& Params)
+{
+    FString InstancePath;
+    if (!Params->TryGetStringField(TEXT("material_instance"), InstancePath))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'material_instance' parameter"));
+    }
+
+    FString ParamType;
+    if (!Params->TryGetStringField(TEXT("param_type"), ParamType))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'param_type' parameter"));
+    }
+
+    FString ParamName;
+    if (!Params->TryGetStringField(TEXT("param_name"), ParamName))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'param_name' parameter"));
+    }
+
+    if (!Params->HasField(TEXT("value")))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'value' parameter"));
+    }
+
+    if (InstancePath.Contains(TEXT(".")))
+    {
+        InstancePath = InstancePath.Left(InstancePath.Find(TEXT("."), ESearchCase::CaseSensitive, ESearchDir::FromEnd));
+    }
+    InstancePath = NormalizeAssetPath(InstancePath, TEXT("/Game/Materials/Instances"));
+
+    UMaterialInstanceConstant* MIC = Cast<UMaterialInstanceConstant>(UEditorAssetLibrary::LoadAsset(InstancePath));
+    if (!MIC)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Material instance not found: %s"), *InstancePath));
+    }
+
+    const FString Type = ParamType.ToLower();
+    const TSharedPtr<FJsonValue> Value = Params->Values.FindRef(TEXT("value"));
+    bool bSuccess = false;
+    FString ErrorMessage;
+
+    FMaterialParameterInfo ParameterInfo(*ParamName);
+    TArray<FMaterialParameterInfo> ScalarInfos;
+    TArray<FMaterialParameterInfo> VectorInfos;
+    TArray<FMaterialParameterInfo> TextureInfos;
+    TArray<FGuid> Ids;
+    MIC->GetAllScalarParameterInfo(ScalarInfos, Ids);
+    MIC->GetAllVectorParameterInfo(VectorInfos, Ids);
+    MIC->GetAllTextureParameterInfo(TextureInfos, Ids);
+
+    auto ContainsParam = [&ParamName](const TArray<FMaterialParameterInfo>& Infos) -> bool
+    {
+        for (const FMaterialParameterInfo& Info : Infos)
+        {
+            if (Info.Name.ToString() == ParamName)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    if (Type == TEXT("scalar"))
+    {
+        if (ContainsParam(ScalarInfos))
+        {
+            MIC->SetScalarParameterValueEditorOnly(ParameterInfo, static_cast<float>(Value->AsNumber()));
+            bSuccess = true;
+        }
+    }
+    else if (Type == TEXT("vector"))
+    {
+        FLinearColor Color = FLinearColor::White;
+        if (Value->Type == EJson::Array)
+        {
+            const TArray<TSharedPtr<FJsonValue>>& Array = Value->AsArray();
+            if (Array.Num() >= 3)
+            {
+                Color.R = static_cast<float>(Array[0]->AsNumber());
+                Color.G = static_cast<float>(Array[1]->AsNumber());
+                Color.B = static_cast<float>(Array[2]->AsNumber());
+                Color.A = Array.Num() >= 4 ? static_cast<float>(Array[3]->AsNumber()) : 1.0f;
+                if (ContainsParam(VectorInfos))
+                {
+                    MIC->SetVectorParameterValueEditorOnly(ParameterInfo, Color);
+                    bSuccess = true;
+                }
+            }
+            else
+            {
+                ErrorMessage = TEXT("Vector value must have at least 3 elements");
+            }
+        }
+        else
+        {
+            ErrorMessage = TEXT("Vector value must be an array [r,g,b,a]");
+        }
+    }
+    else if (Type == TEXT("texture"))
+    {
+        FString TexturePath = Value->AsString();
+        if (TexturePath.Contains(TEXT(".")))
+        {
+            TexturePath = TexturePath.Left(TexturePath.Find(TEXT("."), ESearchCase::CaseSensitive, ESearchDir::FromEnd));
+        }
+        TexturePath = NormalizeAssetPath(TexturePath, TEXT("/Game"));
+
+        UTexture* Texture = Cast<UTexture>(UEditorAssetLibrary::LoadAsset(TexturePath));
+        if (!Texture)
+        {
+            ErrorMessage = FString::Printf(TEXT("Texture not found: %s"), *TexturePath);
+        }
+        else
+        {
+            if (ContainsParam(TextureInfos))
+            {
+                MIC->SetTextureParameterValueEditorOnly(ParameterInfo, Texture);
+                bSuccess = true;
+            }
+        }
+    }
+    else
+    {
+        ErrorMessage = FString::Printf(TEXT("Unsupported param_type: %s"), *ParamType);
+    }
+
+    if (!bSuccess)
+    {
+        if (ErrorMessage.IsEmpty())
+        {
+            auto JoinInfoNames = [](const TArray<FMaterialParameterInfo>& Infos) -> FString
+            {
+                FString Out;
+                for (int32 i = 0; i < Infos.Num(); ++i)
+                {
+                    if (i > 0)
+                    {
+                        Out += TEXT(", ");
+                    }
+                    Out += Infos[i].Name.ToString();
+                }
+                return Out;
+            };
+
+            ErrorMessage = FString::Printf(
+                TEXT("Failed to set parameter '%s' (type=%s). Available scalar=[%s], vector=[%s], texture=[%s]"),
+                *ParamName,
+                *Type,
+                *JoinInfoNames(ScalarInfos),
+                *JoinInfoNames(VectorInfos),
+                *JoinInfoNames(TextureInfos)
+            );
+        }
+        return FUnrealMCPCommonUtils::CreateErrorResponse(ErrorMessage);
+    }
+
+    MIC->PostEditChange();
+    MIC->MarkPackageDirty();
+    UEditorAssetLibrary::SaveLoadedAsset(MIC, false);
+
+    TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+    ResultObj->SetStringField(TEXT("material_instance"), InstancePath);
+    ResultObj->SetStringField(TEXT("param_type"), Type);
+    ResultObj->SetStringField(TEXT("param_name"), ParamName);
+    ResultObj->SetBoolField(TEXT("success"), true);
+    return ResultObj;
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleAssignMaterial(const TSharedPtr<FJsonObject>& Params)
+{
+    FString TargetName;
+    if (!Params->TryGetStringField(TEXT("target"), TargetName) && !Params->TryGetStringField(TEXT("actor_name"), TargetName))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'target' or 'actor_name' parameter"));
+    }
+
+    FString MaterialPath;
+    if (!Params->TryGetStringField(TEXT("material"), MaterialPath) && !Params->TryGetStringField(TEXT("material_path"), MaterialPath))
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'material' or 'material_path' parameter"));
+    }
+
+    if (MaterialPath.Contains(TEXT(".")))
+    {
+        MaterialPath = MaterialPath.Left(MaterialPath.Find(TEXT("."), ESearchCase::CaseSensitive, ESearchDir::FromEnd));
+    }
+    MaterialPath = NormalizeAssetPath(MaterialPath, TEXT("/Game/Materials"));
+
+    int32 SlotIndex = 0;
+    if (Params->HasField(TEXT("slot_index")))
+    {
+        SlotIndex = Params->GetIntegerField(TEXT("slot_index"));
+    }
+
+    UMaterialInterface* Material = Cast<UMaterialInterface>(UEditorAssetLibrary::LoadAsset(MaterialPath));
+    if (!Material)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Material not found: %s"), *MaterialPath));
+    }
+
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (!World)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to get editor world"));
+    }
+
+    TArray<AActor*> AllActors;
+    UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), AllActors);
+
+    AActor* TargetActor = nullptr;
+    for (AActor* Actor : AllActors)
+    {
+        if (!Actor)
+        {
+            continue;
+        }
+
+        if (Actor->GetName() == TargetName || Actor->GetActorLabel() == TargetName)
+        {
+            TargetActor = Actor;
+            break;
+        }
+    }
+
+    if (!TargetActor)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Actor not found: %s"), *TargetName));
+    }
+
+    TArray<UMeshComponent*> MeshComponents;
+    TargetActor->GetComponents<UMeshComponent>(MeshComponents);
+
+    if (MeshComponents.Num() == 0)
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Actor has no mesh components: %s"), *TargetName));
+    }
+
+    int32 AppliedCount = 0;
+    for (UMeshComponent* MeshComp : MeshComponents)
+    {
+        if (!MeshComp)
+        {
+            continue;
+        }
+        MeshComp->SetMaterial(SlotIndex, Material);
+        MeshComp->MarkRenderStateDirty();
+        AppliedCount++;
+    }
+
+    TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+    ResultObj->SetStringField(TEXT("target"), TargetName);
+    ResultObj->SetStringField(TEXT("material"), MaterialPath);
+    ResultObj->SetNumberField(TEXT("slot_index"), SlotIndex);
+    ResultObj->SetNumberField(TEXT("components_updated"), AppliedCount);
+    return ResultObj;
 }
 
 TSharedPtr<FJsonObject> FUnrealMCPBlueprintCommands::HandleSetComponentProperty(const TSharedPtr<FJsonObject>& Params)
